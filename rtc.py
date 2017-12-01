@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+
 # -*- coding: utf-8 -*-
 
 import numpy as np
@@ -21,6 +22,8 @@ import time
 
 
 executable = "/home/rahid/Programowanie/Repos/rogue5.2/rogue"
+SCREEN_WIDTH = 80
+SCREEN_HEIGHT = 24
 
 
 class Wrapper():
@@ -29,8 +32,8 @@ class Wrapper():
                     "j",  # go_down
                     "h",  # go_left
                     "l",  # go_right
-                    ">",  # descend
-                    "s",  # search
+                    # ">",  # descend
+                    # "s",  # search
                     # "." search
                     ]
     ACTIONS = len(GAME_ACTIONS)
@@ -60,9 +63,7 @@ class Wrapper():
                       self.rewards[-1] - self.rewards[-2]))
 
     def score_for_logs(self):
-        score = self.rewards[-1] - self.rewards[self.last_death]
-        self.last_death = self.tick
-        return score
+        return self.rewards[-2]
 
     def _scrap_screen(self):
         info_line = self.state[-1]
@@ -105,17 +106,25 @@ class Wrapper():
             os.write(self.master_fd, bytearray(input_char, "ascii"))
             time.sleep(0.01)
 
+    def _get_player_pos(self):
+        for y, line in enumerate(self.state):
+            x = line.find("@")
+            if x != -1:
+                return x, y
+
+
     def get_frame(self):
+        player_pos = self._get_player_pos()
+        player_left_edge = player_pos[0] - SCREEN_HEIGHT // 2
+
+        max_left_edge = SCREEN_WIDTH - SCREEN_HEIGHT
+        min_left_edge = 0
+        left_edge = sorted([min_left_edge, player_left_edge, max_left_edge])[1]
+
         state_as_int = []
-        padding = (80 - 24) // 2
-        for _ in range(padding):
-            state_as_int += [0 for _ in range(80)]
-
         for line in self.state:
-            state_as_int += [ord(c) for c in line]
-
-        for _ in range(padding):
-            state_as_int += [0 for _ in range(80)]
+            clip = line[left_edge: left_edge + SCREEN_HEIGHT]
+            state_as_int += [ord(c) for c in clip]
         return np.array(state_as_int)
 
     def run_in_loop(self):
@@ -131,7 +140,7 @@ class Wrapper():
                 terminal = self._is_terminal()
                 if terminal:
                     self._start_game(restart=True)
-                    continue
+                    break
 
                 tick += 1
                 self.state = self.screen.display
@@ -182,9 +191,9 @@ class Wrapper():
                 terminal = self._is_terminal()
                 self._push_action(" ")
                 if terminal:
-                    self.rewards += [self.rewards[-1]]
+                    self.rewards += [0]
                     self._start_game(restart=True)
-                    break
+                    return 0, terminal
                 # No more output, let's process results
                 self.state = self.screen.display
                 self.rewards += [self._calculate_reward()]

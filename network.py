@@ -11,9 +11,9 @@ GAMMA = 0.99
 INITIAL_EPSILON = 0.99
 MINIMUM_EPSILON = 0.075
 
-EXPERIMENT = 10000
+EXPERIMENT = 100000
 EXPLORATION = 800000
-MEMORY_SIZE = 40000
+MEMORY_SIZE = 200000
 MINIBATCH_SIZE = 32
 DELTA_EPS = (INITIAL_EPSILON - MINIMUM_EPSILON) / EXPLORATION
 
@@ -45,7 +45,7 @@ class DeepLearningTrainer:
         self.holders = {"actions": tf.placeholder("float",
                                                   [None, self.game.ACTIONS]),
                         "target_fun":  tf.placeholder("float", [None]),
-                        "state": tf.placeholder("float", [None, 80, 80, 4])}
+                        "state": tf.placeholder("float", [None, 24, 24, 4])}
         self.holders["results"] = self.build_network()
         self.holders["training_step"] = self.build_optimizer()
         self.log_file = open("logs.txt", "w")
@@ -55,18 +55,16 @@ class DeepLearningTrainer:
         bias = [None] * 5
         layer = [None] * 4
 
-        (weights[0], bias[0]) = generate_node([8, 8, 4, 32])
-        (weights[1], bias[1]) = generate_node([4, 4, 32, 64])
-        (weights[2], bias[2]) = generate_node([3, 3, 64, 64])
-        (weights[3], bias[3]) = generate_node([6400, 512])
-        (weights[4], bias[4]) = generate_node([512, self.game.ACTIONS])
+        (weights[0], bias[0]) = generate_node([6, 6, 4, 16])
+        (weights[1], bias[1]) = generate_node([2, 2, 16, 4])
+        (weights[2], bias[2]) = generate_node([64, 32])
+        (weights[3], bias[3]) = generate_node([32, self.game.ACTIONS])
 
-        layer[0] = conv_relu(self.holders["state"], weights[0], 4, bias[0])
+        layer[0] = conv_relu(self.holders["state"], weights[0], 3, bias[0])
         layer[1] = conv_relu(layer[0], weights[1], 2, bias[1])
-        layer[2] = conv_relu(layer[1], weights[2], 1, bias[2])
-        full_layer = tf.matmul(tf.reshape(layer[2], [-1, 6400]), weights[3])
-        layer[3] = tf.nn.relu(full_layer + bias[3])
-        return tf.matmul(layer[3], weights[4]) + bias[4]
+        full_layer = tf.matmul(tf.reshape(layer[1], [-1, 64]), weights[2])
+        layer[2] = tf.nn.relu(full_layer + bias[2])
+        return tf.matmul(layer[2], weights[3]) + bias[3]
 
     def build_optimizer(self):
         product = tf.multiply(self.holders["results"], self.holders["actions"])
@@ -77,7 +75,7 @@ class DeepLearningTrainer:
         return training_step
 
     def initial_state(self):
-        blank = np.zeros((80, 80))
+        blank = np.zeros((24, 24))
         state = np.stack((blank, blank, blank, blank), axis=2)
         action = 0
         reward, terminal = self.game.next_tick(action)
@@ -104,7 +102,7 @@ class DeepLearningTrainer:
         pixels = self.game.get_frame()
         # squashed = np.empty([80, 80])
         # squashed = pixels.reshape(80, 2, 80, 2).sum(axis=1).sum(axis=2)
-        processed_frame = pixels.reshape(80, 80, 1)
+        processed_frame = pixels.reshape(24, 24, 1)
 
         return np.append(processed_frame, state[:, :, 0:3], axis=2)
 
