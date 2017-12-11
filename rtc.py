@@ -33,7 +33,7 @@ class Wrapper():
                     "h",  # go_left
                     "l",  # go_right
                     # ">",  # descend
-                    # "s",  # search
+                    "s",  # search
                     # "." search
                     ]
     ACTIONS = len(GAME_ACTIONS)
@@ -98,8 +98,8 @@ class Wrapper():
 
     def _calculate_reward(self):
         heuristics = self._scrap_screen()
-        return (heuristics["explored"]
-                + (heuristics["dungeon_level"] - 1) * 1000)
+        return (heuristics["explored"])
+                # + (heuristics["dungeon_level"] - 1) * 1000)
 
     def _push_action(self, input_):
         for input_char in input_:
@@ -160,6 +160,9 @@ class Wrapper():
     def _start_game(self, restart=False):
         if restart:
             self._push_action(" ")
+            self._push_action("\r\n")
+            self._push_action("^C")
+
         p_pid, master_fd = pty.fork()
         if p_pid == 0:  # Child.
             os.execvpe(executable, [executable],

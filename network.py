@@ -55,7 +55,7 @@ class DeepLearningTrainer:
         bias = [None] * 5
         layer = [None] * 4
 
-        (weights[0], bias[0]) = generate_node([6, 6, 4, 16])
+        (weights[0], bias[0]) = generate_node([4, 4, 4, 16])
         (weights[1], bias[1]) = generate_node([2, 2, 16, 4])
         (weights[2], bias[2]) = generate_node([64, 32])
         (weights[3], bias[3]) = generate_node([32, self.game.ACTIONS])
