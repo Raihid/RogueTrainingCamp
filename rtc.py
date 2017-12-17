@@ -33,7 +33,7 @@ class Wrapper():
                     "h",  # go_left
                     "l",  # go_right
                     # ">",  # descend
-                    "s",  # search
+                    # "s",  # search
                     # "." search
                     ]
     ACTIONS = len(GAME_ACTIONS)
@@ -78,9 +78,8 @@ class Wrapper():
             print(info_line)
 
         heuristics = {}
-        heuristics["dungeon_level"] = int(re
-                                          .search("Level:\s+(\d+)", info_line)
-                                          .group(1))
+        heuristics["dungeon_level"] = int(
+                re.search("Level:\s+(\d+)", info_line).group(1))
         heuristics["gold"] = int(re.search("Gold:\s+(\d+)", info_line).group(1))
 
         hp_captures = re.search("Hp:\s+(\d+)\((\d+)\)", info_line)
@@ -94,10 +93,14 @@ class Wrapper():
         heuristics["explored"] = sum(not c.isspace()
                                      for line in self.state[1:-1] for c in line)
 
+
         return heuristics
 
     def _calculate_reward(self):
-        heuristics = self._scrap_screen()
+        try:
+            heuristics = self._scrap_screen()
+        except AttributeError:
+            return self.rewards[-1]
         return (heuristics["explored"])
                 # + (heuristics["dungeon_level"] - 1) * 1000)
 
@@ -114,17 +117,25 @@ class Wrapper():
 
 
     def get_frame(self):
-        player_pos = self._get_player_pos()
-        player_left_edge = player_pos[0] - SCREEN_HEIGHT // 2
+        # player_pos = self._get_player_pos()
+        # player_left_edge = player_pos[0] - SCREEN_HEIGHT // 2
 
-        max_left_edge = SCREEN_WIDTH - SCREEN_HEIGHT
-        min_left_edge = 0
-        left_edge = sorted([min_left_edge, player_left_edge, max_left_edge])[1]
+        # max_left_edge = SCREEN_WIDTH - SCREEN_HEIGHT
+        # min_left_edge = 0
+        # left_edge = sorted([min_left_edge, player_left_edge, max_left_edge])[1]
 
         state_as_int = []
+        padding = (SCREEN_WIDTH - SCREEN_HEIGHT) // 2
+
+
+        for _ in range(padding):
+            state_as_int += [0] * SCREEN_WIDTH
         for line in self.state:
-            clip = line[left_edge: left_edge + SCREEN_HEIGHT]
-            state_as_int += [ord(c) for c in clip]
+            # clip = line[left_edge: left_edge + SCREEN_HEIGHT]
+            state_as_int += [ord(c) for c in line]
+        for _ in range(padding):
+            state_as_int += [0] * SCREEN_WIDTH
+
         return np.array(state_as_int)
 
     def run_in_loop(self):
@@ -138,9 +149,9 @@ class Wrapper():
             if not read_list:
                 # No more output, let's process results
                 terminal = self._is_terminal()
+                self._push_action(" ")
                 if terminal:
                     self._start_game(restart=True)
-                    break
 
                 tick += 1
                 self.state = self.screen.display
@@ -162,6 +173,7 @@ class Wrapper():
             self._push_action(" ")
             self._push_action("\r\n")
             self._push_action("^C")
+            os.wait()
 
         p_pid, master_fd = pty.fork()
         if p_pid == 0:  # Child.
