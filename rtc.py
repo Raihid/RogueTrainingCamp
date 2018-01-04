@@ -9,6 +9,7 @@ import pyte
 import random
 import re
 import select
+import string
 import sys
 import time
 
@@ -21,7 +22,7 @@ import time
 # Obraz nie jest kwadratowy D:
 
 
-executable = "/home/rahid/Programowanie/Repos/rogue5.2/rogue"
+executable = "/home/rahid/Programming/Repos/rogue5.2/rogue"
 SCREEN_WIDTH = 80
 SCREEN_HEIGHT = 24
 
@@ -38,6 +39,14 @@ class Wrapper():
                     ]
     ACTIONS = len(GAME_ACTIONS)
     NAME = "Rogue"
+
+    CHAR_BINS = ["@", # Player char
+                 string.ascii_letters, # Monsters
+                 "-|",  # Walls
+                 "+",  # Doors
+                 ".#",  # Floors/corridors
+                 "*?!%",  # Items
+                 ""]  # Other
 
     def __init__(self):
         self.state = []
@@ -115,7 +124,21 @@ class Wrapper():
             if x != -1:
                 return x, y
 
+    def char_to_vec(self, char):
 
+        for idx, char_bin in enumerate(self.CHAR_BINS):
+            pos = char_bin.find(char)
+            if pos != -1:
+                bin_index = idx
+                break
+        else:
+            bin_index = len(self.CHAR_BINS) - 1
+            pos = 0
+
+        one_hot = [0] * len(self.CHAR_BINS)
+        one_hot[bin_index] = pos + 1
+        return one_hot
+        
     def get_frame(self):
         # player_pos = self._get_player_pos()
         # player_left_edge = player_pos[0] - SCREEN_HEIGHT // 2
@@ -124,19 +147,17 @@ class Wrapper():
         # min_left_edge = 0
         # left_edge = sorted([min_left_edge, player_left_edge, max_left_edge])[1]
 
-        state_as_int = []
+        state_as_vec = []
         padding = (SCREEN_WIDTH - SCREEN_HEIGHT) // 2
 
-
         for _ in range(padding):
-            state_as_int += [0] * SCREEN_WIDTH
+            state_as_vec += [[0] * len(self.CHAR_BINS)] * SCREEN_WIDTH
         for line in self.state:
-            # clip = line[left_edge: left_edge + SCREEN_HEIGHT]
-            state_as_int += [ord(c) for c in line]
+            state_as_vec += [self.char_to_vec(c) for c in line]
         for _ in range(padding):
-            state_as_int += [0] * SCREEN_WIDTH
+            state_as_vec += [[0] * len(self.CHAR_BINS)] * SCREEN_WIDTH
 
-        return np.array(state_as_int)
+        return np.array(state_as_vec)
 
     def run_in_loop(self):
         tick = 0

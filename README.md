@@ -5,4 +5,4 @@ The aim of this project is to provide a sensible learning environment for roguel
 
 ## Usage
 
-./rtc.py <path to Rogue>
+./rtc.py "path to Rogue" "number of threads"

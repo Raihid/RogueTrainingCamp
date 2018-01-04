@@ -11,13 +11,14 @@ GAMMA = 0.99
 INITIAL_EPSILON = 0.99
 MINIMUM_EPSILON = 0.075
 
-EXPERIMENT = 40000
-# EXPLORATION = 850000
-EXPLORATION = 200000
-MEMORY_SIZE = 40000
+EXPERIMENT = 10000
+EXPLORATION = 1500000
+# EXPLORATION = 200000
+MEMORY_SIZE = 10000
 MINIBATCH_SIZE = 16
 DELTA_EPS = (INITIAL_EPSILON - MINIMUM_EPSILON) / EXPLORATION
 
+ONEHOT_LEN = len(rtc.Wrapper.CHAR_BINS)
 
 def current_milli_time():
     return int(round(time.time() * 1000))
@@ -46,7 +47,7 @@ class DeepLearningTrainer:
         self.holders = {"actions": tf.placeholder("float",
                                                   [None, self.game.ACTIONS]),
                         "target_fun":  tf.placeholder("float", [None]),
-                        "state": tf.placeholder("float", [None, 80, 80, 2])}
+                        "state": tf.placeholder("float", [None, 80, 80, ONEHOT_LEN])}
         self.holders["results"] = self.build_network()
         self.holders["training_step"] = self.build_optimizer()
         self.log_file = open("logs.txt", "w")
@@ -56,7 +57,7 @@ class DeepLearningTrainer:
         bias = [None] * 5
         layer = [None] * 4
 
-        (weights[0], bias[0]) = generate_node([3, 3, 2, 16])
+        (weights[0], bias[0]) = generate_node([3, 3, ONEHOT_LEN, 16])
         (weights[1], bias[1]) = generate_node([2, 2, 16, 32])
         (weights[2], bias[2]) = generate_node([1, 1, 32, 32])
         (weights[3], bias[3]) = generate_node([6272, 512])
@@ -78,7 +79,7 @@ class DeepLearningTrainer:
         return training_step
 
     def initial_state(self):
-        blank = np.zeros((80, 80, 2))
+        blank = np.zeros((80, 80, ONEHOT_LEN))
         action = 0
         reward, terminal = self.game.next_tick(action)
         return blank, action, reward, terminal
@@ -104,9 +105,9 @@ class DeepLearningTrainer:
         pixels = self.game.get_frame()
         # squashed = np.empty([80, 80])
         # squashed = pixels.reshape(80, 2, 80, 2).sum(axis=1).sum(axis=2)
-        processed_frame = pixels.reshape(80, 80, 1)
+        processed_frame = pixels.reshape(80, 80, ONEHOT_LEN)
 
-        return np.append(processed_frame, state[:, :, 0:1], axis=2)
+        return processed_frame # np.append(processed_frame, state[:, :, 0:1], axis=2)
 
     def feed_forward(self, state):
         input_dict = {self.holders["state"]: [state]}
