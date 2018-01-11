@@ -14,18 +14,24 @@ import sys
 import time
 
 # TODO
-# Pobawić się jakimś agentem
-# Pomyśleć o heurystykach do eksploracji
-# Uproszczenie akcji
-# Gif/animacja
 # Sygnał po zakończeniu tury od rogue
-# Obraz nie jest kwadratowy D:
+# Staty - analiza deskryptora, wysokie value stanu =>
+# ktora czesc stanu odpowiada za to, saliency
+
+# A3C, A2C
+# Labirynty 3D, Unreal, RE with axilary tasks, mininagrody do chodzenia
+# Logarytm z pól
+# Advantage? Policy gradient, Sutton, Silvera
+# Wyciac ostatnia linijke
 
 
-executable = "/home/rahid/Programowanie/Repos/rogue5.2/rogue"
+executable = "/home/rahid/Programming/Repos/rogue5.2/rogue"
 SCREEN_WIDTH = 80
 SCREEN_HEIGHT = 24
 CLIPPED_SCREEN_WIDTH = 80
+
+SQUARE_SCREEN = False
+ONE_HOT = True
 
 
 class Wrapper():
@@ -45,19 +51,17 @@ class Wrapper():
                  "-|",  # Walls
                  "+",  # Doors
                  ".#",  # Floors/corridors
-                 "*?!%",  # Items
+                 "*?!%[]",  # Items
                  " ",  # Empty space
                  ""]  # Other
 
-    def __init__(self, master_fd, screen):
-        self.master_fd = master_fd
-        self.screen = screen
-        self.stream = pyte.Stream(self.screen)
+    def __init__(self):
         self.state = []
         self.rewards = [0]
         self.action_history = ["EPOCH START"]
         self.tick = 0
         self.last_death = 0
+        self.process_screen = self.char_to_vec if ONE_HOT else ord
 
         self._start_game()
 
@@ -106,7 +110,6 @@ class Wrapper():
         heuristics["explored"] = sum(not c.isspace()
                                      for line in self.state[1:-1] for c in line)
 
-        # return np.sign(heuristics)
         return heuristics
 
     def _calculate_reward(self):
@@ -115,7 +118,7 @@ class Wrapper():
         except AttributeError:
             return self.rewards[-1]
         return (heuristics["explored"])
-                # + (heuristics["dungeon_level"] - 1) * 1000)
+        # + (heuristics["dungeon_level"] - 1) * 1000)
 
     def _push_action(self, input_):
         for input_char in input_:
@@ -129,6 +132,9 @@ class Wrapper():
                 return x, y
 
     def char_to_vec(self, char):
+        if ord(char) == 0:
+            return [0] * len(self.CHAR_BINS)
+
         for idx, char_bin in enumerate(self.CHAR_BINS):
             pos = char_bin.find(char)
             if pos != -1:
@@ -141,39 +147,40 @@ class Wrapper():
         one_hot = [0] * len(self.CHAR_BINS)
         one_hot[bin_index] = 1
         return one_hot
-        
-    def print_char_frame(self):
+
+    def get_clipped_edges(self):
+        if not SQUARE_SCREEN:
+            return 0, SCREEN_WIDTH
         player_pos = self._get_player_pos()
         player_left_edge = player_pos[0] - CLIPPED_SCREEN_WIDTH // 2
 
         max_left_edge = SCREEN_WIDTH - CLIPPED_SCREEN_WIDTH
         min_left_edge = 0
         left_edge = sorted([min_left_edge, player_left_edge, max_left_edge])[1]
+        right_edge = left_edge + CLIPPED_SCREEN_WIDTH
 
-        state_as_vec = []
-        padding = (CLIPPED_SCREEN_WIDTH - SCREEN_HEIGHT)
+        return left_edge, right_edge
+
+    def print_char_frame(self):
+        left_edge, right_edge = self.get_clipped_edges()
 
         for line in self.state:
             print(line[left_edge:left_edge + CLIPPED_SCREEN_WIDTH])
 
     def get_frame(self):
-        player_pos = self._get_player_pos()
-        player_left_edge = player_pos[0] - CLIPPED_SCREEN_WIDTH // 2
+        left_edge, right_edge = self.get_clipped_edges()
 
-        max_left_edge = SCREEN_WIDTH - CLIPPED_SCREEN_WIDTH
-        min_left_edge = 0
-        left_edge = sorted([min_left_edge, player_left_edge, max_left_edge])[1]
-
-        state_as_vec = []
-        padding = (CLIPPED_SCREEN_WIDTH - SCREEN_HEIGHT)
-
+        processed_state = []
         for line in self.state:
-            state_as_vec += [[self.char_to_vec(c) for c
-                              in line[left_edge:left_edge + CLIPPED_SCREEN_WIDTH]]]
-        # for _ in range(padding):
-        #     state_as_vec += [[[0] * len(self.CHAR_BINS)] * CLIPPED_SCREEN_WIDTH]
+            processed_state += [[self.process_screen(c) for c
+                                 in line[left_edge:right_edge]]]
 
-        return np.array(state_as_vec, dtype=np.int8)
+        padding = (CLIPPED_SCREEN_WIDTH - SCREEN_HEIGHT) if SQUARE_SCREEN else 0
+        for _ in range(padding):
+            null_element = self.process_screen('\0')
+            processed_state += [[null_element] * CLIPPED_SCREEN_WIDTH]
+
+        return np.array(processed_state)
 
     def run_in_loop(self):
         tick = 0
@@ -261,7 +268,6 @@ class Wrapper():
 
 
 def init_game():
-    screen = pyte.Screen(80, 24)
     p_pid, master_fd = pty.fork()
     if p_pid == 0:  # Child.
         os.execvpe(executable, [executable],

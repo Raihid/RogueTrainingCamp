@@ -1,9 +1,6 @@
 #!/usr/bin/python3
 
-<<<<<<< Updated upstream
-=======
 import datetime
->>>>>>> Stashed changes
 import tensorflow as tf
 import numpy as np
 import rtc
@@ -55,8 +52,9 @@ class DeepLearningTrainer:
                         "state": tf.placeholder("float", [None, 24, 80, ONEHOT_LEN])}
         self.holders["results"] = self.build_network()
         self.holders["training_step"] = self.build_optimizer()
-        log_name =  datetime.datetime.now().strftime("logs_%Y%m%d_%H%M%S.txt")
-        self.log_file = open(log_name, "w")
+        log_dir = "logs"
+        log_name =  datetime.datetime.now().strftime("logs_%Y%m%d_%H:%M.txt")
+        self.log_file = open(log_dir + "/" + log_name, "w")
 
     def build_network(self):
         weights = [None] * 5
