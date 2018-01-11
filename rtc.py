@@ -22,9 +22,10 @@ import time
 # Obraz nie jest kwadratowy D:
 
 
-executable = "/home/rahid/Programming/Repos/rogue5.2/rogue"
+executable = "/home/rahid/Programowanie/Repos/rogue5.2/rogue"
 SCREEN_WIDTH = 80
 SCREEN_HEIGHT = 24
+CLIPPED_SCREEN_WIDTH = 80
 
 
 class Wrapper():
@@ -39,16 +40,19 @@ class Wrapper():
                     ]
     ACTIONS = len(GAME_ACTIONS)
     NAME = "Rogue"
-
     CHAR_BINS = ["@", # Player char
                  string.ascii_letters, # Monsters
                  "-|",  # Walls
                  "+",  # Doors
                  ".#",  # Floors/corridors
                  "*?!%",  # Items
+                 " ",  # Empty space
                  ""]  # Other
 
-    def __init__(self):
+    def __init__(self, master_fd, screen):
+        self.master_fd = master_fd
+        self.screen = screen
+        self.stream = pyte.Stream(self.screen)
         self.state = []
         self.rewards = [0]
         self.action_history = ["EPOCH START"]
@@ -102,7 +106,7 @@ class Wrapper():
         heuristics["explored"] = sum(not c.isspace()
                                      for line in self.state[1:-1] for c in line)
 
-
+        # return np.sign(heuristics)
         return heuristics
 
     def _calculate_reward(self):
@@ -125,7 +129,6 @@ class Wrapper():
                 return x, y
 
     def char_to_vec(self, char):
-
         for idx, char_bin in enumerate(self.CHAR_BINS):
             pos = char_bin.find(char)
             if pos != -1:
@@ -136,28 +139,41 @@ class Wrapper():
             pos = 0
 
         one_hot = [0] * len(self.CHAR_BINS)
-        one_hot[bin_index] = pos + 1
+        one_hot[bin_index] = 1
         return one_hot
         
-    def get_frame(self):
-        # player_pos = self._get_player_pos()
-        # player_left_edge = player_pos[0] - SCREEN_HEIGHT // 2
+    def print_char_frame(self):
+        player_pos = self._get_player_pos()
+        player_left_edge = player_pos[0] - CLIPPED_SCREEN_WIDTH // 2
 
-        # max_left_edge = SCREEN_WIDTH - SCREEN_HEIGHT
-        # min_left_edge = 0
-        # left_edge = sorted([min_left_edge, player_left_edge, max_left_edge])[1]
+        max_left_edge = SCREEN_WIDTH - CLIPPED_SCREEN_WIDTH
+        min_left_edge = 0
+        left_edge = sorted([min_left_edge, player_left_edge, max_left_edge])[1]
 
         state_as_vec = []
-        padding = (SCREEN_WIDTH - SCREEN_HEIGHT) // 2
+        padding = (CLIPPED_SCREEN_WIDTH - SCREEN_HEIGHT)
 
-        for _ in range(padding):
-            state_as_vec += [[0] * len(self.CHAR_BINS)] * SCREEN_WIDTH
         for line in self.state:
-            state_as_vec += [self.char_to_vec(c) for c in line]
-        for _ in range(padding):
-            state_as_vec += [[0] * len(self.CHAR_BINS)] * SCREEN_WIDTH
+            print(line[left_edge:left_edge + CLIPPED_SCREEN_WIDTH])
 
-        return np.array(state_as_vec)
+    def get_frame(self):
+        player_pos = self._get_player_pos()
+        player_left_edge = player_pos[0] - CLIPPED_SCREEN_WIDTH // 2
+
+        max_left_edge = SCREEN_WIDTH - CLIPPED_SCREEN_WIDTH
+        min_left_edge = 0
+        left_edge = sorted([min_left_edge, player_left_edge, max_left_edge])[1]
+
+        state_as_vec = []
+        padding = (CLIPPED_SCREEN_WIDTH - SCREEN_HEIGHT)
+
+        for line in self.state:
+            state_as_vec += [[self.char_to_vec(c) for c
+                              in line[left_edge:left_edge + CLIPPED_SCREEN_WIDTH]]]
+        # for _ in range(padding):
+        #     state_as_vec += [[[0] * len(self.CHAR_BINS)] * CLIPPED_SCREEN_WIDTH]
+
+        return np.array(state_as_vec, dtype=np.int8)
 
     def run_in_loop(self):
         tick = 0
@@ -194,6 +210,7 @@ class Wrapper():
             self._push_action(" ")
             self._push_action("\r\n")
             self._push_action("^C")
+            os.close(self.master_fd)
             os.wait()
 
         p_pid, master_fd = pty.fork()
@@ -221,7 +238,8 @@ class Wrapper():
                 [self.master_fd], [], [], 0)
 
             if not read_list:
-                if not self.tick % 10:
+                if not self.tick % 5:
+                    self.print_char_frame()
                     self._dump_tick()
 
                 terminal = self._is_terminal()
