@@ -6,13 +6,14 @@ import numpy as np
 import rtc
 import random
 import time
+import os
 
 ALPHA = 1e-4
 GAMMA = 0.99
 INITIAL_EPSILON = 0.99
 MINIMUM_EPSILON = 0.075
 
-EXPERIMENT = 70000
+EXPERIMENT = 50000
 EXPLORATION = 1000000
 # EXPLORATION = 200000
 MEMORY_SIZE = 120000
@@ -41,37 +42,41 @@ def generate_node(weight_shape):
 class DeepLearningTrainer:
 
     def __init__(self):
-        self.game = rtc.Wrapper()
+        self.env = rtc.Wrapper()
         self.batch = []
         self.session = tf.InteractiveSession()
         self.epsilon = INITIAL_EPSILON
         self.epochs = 0
         self.holders = {"actions": tf.placeholder("float",
-                                                  [None, self.game.ACTIONS]),
+                                                  [None, self.env.ACTIONS]),
                         "target_fun":  tf.placeholder("float", [None]),
-                        "state": tf.placeholder("float", [None, 24, 80, ONEHOT_LEN])}
-        self.holders["results"] = self.build_network()
+                        "obs": tf.placeholder("float", [None, 24, 80, ONEHOT_LEN])}
+        self.holders["results"] = self.build_network("q_network")
+        self.holders["target_results"] = self.build_network("target_q_network")
         self.holders["training_step"] = self.build_optimizer()
+        self.update_target_op = self.build_target_updater()
         log_dir = "logs"
         log_name =  datetime.datetime.now().strftime("logs_%Y%m%d_%H:%M.txt")
         self.log_file = open(log_dir + "/" + log_name, "w")
 
-    def build_network(self):
-        weights = [None] * 5
-        bias = [None] * 5
-        layer = [None] * 4
+    def build_network(self, name):
+        with tf.variable_scope(name):
+            weights = [None] * 5
+            bias = [None] * 5
+            layer = [None] * 4
 
-        (weights[0], bias[0]) = generate_node([4, 4, ONEHOT_LEN, 32])
-        (weights[1], bias[1]) = generate_node([3, 3, 32, 64])
-        (weights[2], bias[2]) = generate_node([2, 2, 64, 64])
-        (weights[3], bias[3]) = generate_node([30720, 512])
-        (weights[4], bias[4]) = generate_node([512, self.game.ACTIONS])
+            (weights[0], bias[0]) = generate_node([4, 4, ONEHOT_LEN, 32])
+            (weights[1], bias[1]) = generate_node([3, 3, 32, 64])
+            (weights[2], bias[2]) = generate_node([2, 2, 64, 64])
+            (weights[3], bias[3]) = generate_node([30720, 512])
+            (weights[4], bias[4]) = generate_node([512, self.env.ACTIONS])
 
-        layer[0] = conv_relu(self.holders["state"], weights[0], 2, bias[0])
-        layer[1] = conv_relu(layer[0], weights[1], 1, bias[1])
-        layer[2] = conv_relu(layer[1], weights[2], 1, bias[2])
-        full_layer = tf.matmul(tf.reshape(layer[2], [-1, 30720]), weights[3])
-        layer[3] = tf.nn.relu(full_layer + bias[3])
+            layer[0] = conv_relu(self.holders["obs"], weights[0], 2, bias[0])
+            layer[1] = conv_relu(layer[0], weights[1], 1, bias[1])
+            layer[2] = conv_relu(layer[1], weights[2], 1, bias[2])
+            full_layer = tf.matmul(tf.reshape(layer[2], [-1, 30720]), weights[3])
+            layer[3] = tf.nn.relu(full_layer + bias[3])
+
         return tf.matmul(layer[3], weights[4]) + bias[4]
 
     def build_optimizer(self):
@@ -82,11 +87,11 @@ class DeepLearningTrainer:
         training_step = tf.train.AdamOptimizer(ALPHA).minimize(cost)
         return training_step
 
-    def initial_state(self):
+    def initial_obs(self):
         blank = np.zeros((24, 80, ONEHOT_LEN))
         action = 0
-        reward, terminal = self.game.next_tick(action)
-        return blank, action, reward, terminal
+        obs, reward, terminal, info = self.env.step(action)
+        return obs, action, reward, terminal
 
     def load_weights(self):
         saver = tf.train.Saver()
@@ -101,39 +106,32 @@ class DeepLearningTrainer:
 
     def choose_action(self, results_v):
         if random.random() < self.epsilon:
-            return random.randrange(self.game.ACTIONS), True
+            return random.randrange(self.env.ACTIONS), True
         else:
             return np.argmax(results_v), False
 
-    def process_frame(self, state):
-        pixels = self.game.get_frame()
-        # squashed = np.empty([40, 40])
-        # squashed = pixels.reshape(80, 2, 80, 2).sum(axis=1).sum(axis=2)
-        processed_frame = pixels.reshape(24, 80, ONEHOT_LEN)
 
-        return processed_frame # np.append(processed_frame, state[:, :, 0:1], axis=2)
-
-    def feed_forward(self, state):
-        input_dict = {self.holders["state"]: [state]}
+    def feed_forward(self, obs):
+        input_dict = {self.holders["obs"]: [obs]}
         results_v = self.holders["results"].eval(feed_dict=input_dict)[0]
 
         chosen_action, randomized = self.choose_action(results_v)
         print(results_v, "RAND" if randomized else "")
 
-        action_v = [0] * self.game.ACTIONS
+        action_v = [0] * self.env.ACTIONS
         action_v[chosen_action] = 1
 
         self.epsilon = max(self.epsilon - DELTA_EPS, MINIMUM_EPSILON)
 
-        reward, terminal = self.game.next_tick(chosen_action)
-        new_state = self.process_frame(state)
-        return new_state, action_v, reward, terminal, max(results_v)
+        new_obs, reward, terminal, info = self.env.step(chosen_action)
+        return new_obs, action_v, reward, terminal, max(results_v)
 
     def learn_minibatch(self):
         sample = random.sample(self.batch, MINIBATCH_SIZE)
-        feed_dict = {self.holders["state"]: [member[3] for member in sample]}
+        feed_dict = {self.holders["obs"]: [member[3] for member in sample]}
 
-        readout = self.holders["results"].eval(feed_dict=feed_dict)
+        readout = self.holders["target_results"].eval(feed_dict=feed_dict)
+        compare_readout = self.holders["results"].eval(feed_dict=feed_dict)
         y = [None] * MINIBATCH_SIZE
         for idx, member in enumerate(sample):
             y[idx] = member[2]
@@ -143,32 +141,46 @@ class DeepLearningTrainer:
         self.holders["training_step"].run(feed_dict={
             self.holders["target_fun"]: y,
             self.holders["actions"]: [member[1] for member in sample],
-            self.holders["state"]: [member[0] for member in sample]})
+            self.holders["obs"]: [member[0] for member in sample]})
 
-    def experiment_phase(self, state):
+    def experiment_phase(self, obs):
         while self.epochs < EXPERIMENT:
-            chosen_action = random.randrange(self.game.ACTIONS)
-            action_v = [0] * self.game.ACTIONS
+            chosen_action = random.randrange(self.env.ACTIONS)
+            action_v = [0] * self.env.ACTIONS
             action_v[chosen_action] = 1
-            reward, terminal = self.game.next_tick(chosen_action)
-            new_state = self.process_frame(state)
-            self.batch.append((state, action_v, reward, new_state, terminal))
+            new_obs, reward, terminal, info = self.env.step(chosen_action)
+            self.batch.append((obs, action_v, reward, new_obs, terminal))
 
-            state = new_state
+            obs = new_obs
             self.epochs += 1
-        return state
+        return obs
+
+    def build_target_updater(self):
+        q_vars = tf.get_collection(
+                tf.GraphKeys.GLOBAL_VARIABLES,
+                scope=tf.get_variable_scope().name + "/q_network")
+        target_q_vars = tf.get_collection(
+                tf.GraphKeys.GLOBAL_VARIABLES,
+                scope=tf.get_variable_scope().name + "/target_q_network")
+
+        target_updates = []
+        for var, target_var in zip(sorted(q_vars, key=lambda v: v.name),
+                                   sorted(target_q_vars, key=lambda v: v.name)):
+            target_updates += [target_var.assign(var)]
+        return tf.group(*target_updates)
+
 
     def train_network(self):
         savepoint = self.load_weights()
-        state, action_v, reward, terminal = self.initial_state()
-        state = self.experiment_phase(state)
+        obs, action_v, reward, terminal = self.initial_obs()
+        obs = self.experiment_phase(obs)
 
         reward_sum = reward
         q_sum = 0
         while True:
             millis = current_milli_time()
-            new_state, action_v, reward, terminal, q = self.feed_forward(state)
-            self.batch.append((state, action_v, reward, new_state, terminal))
+            new_obs, action_v, reward, terminal, q = self.feed_forward(obs)
+            self.batch.append((obs, action_v, reward, new_obs, terminal))
 
             if(len(self.batch) > MEMORY_SIZE):
                 self.batch.pop(0)
@@ -179,10 +191,13 @@ class DeepLearningTrainer:
             self.learn_minibatch()
 
             if terminal is True:
-                score = self.game.score_for_logs()
+                score = self.env.score_for_logs()
                 self.log_file.write("Score: {}\tEpoch: {}\n"
                                     .format(score, self.epochs))
                 self.log_file.flush()
+
+            if self.epochs % 20 == 0:
+                self.session.run(self.update_target_op)
 
             if self.epochs % 5000 == 0:
                 avg_q = q_sum / 5000.0
@@ -194,13 +209,13 @@ class DeepLearningTrainer:
 
             if self.epochs % 10000 == 0:
                 savepoint.save(self.session,
-                               'saved_networks/{}-dqn'.format(self.game.NAME),
+                               'saved_networks/{}-dqn'.format(self.env.NAME),
                                global_step=self.epochs)
 
             print("Epoch: {}\tR: {}\tA: {}\t Eps: {}\tT: {}".
                   format(self.epochs, reward, np.argmax(action_v),
                          self.epsilon, current_milli_time() - millis))
-            state = new_state
+            obs = new_obs
             self.epochs += 1
 
         self.log_file.close()
@@ -208,7 +223,6 @@ class DeepLearningTrainer:
     def run(self):
         self.session.run(tf.initialize_all_variables())
         self.train_network()
-
 
 if __name__ == "__main__":
     dlt = DeepLearningTrainer()

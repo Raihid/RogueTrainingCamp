@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+
 # -*- coding: utf-8 -*-
 
 import numpy as np
@@ -13,8 +14,11 @@ import string
 import sys
 import time
 
+from gym import spaces
+
 # TODO
-# Sygnał po zakończeniu tury od rogue
+# Przerobic to na API od OpenAI
+# Sygnal po zakończeniu tury od rogue
 # Staty - analiza deskryptora, wysokie value stanu =>
 # ktora czesc stanu odpowiada za to, saliency
 
@@ -32,6 +36,7 @@ CLIPPED_SCREEN_WIDTH = 80
 
 SQUARE_SCREEN = False
 ONE_HOT = True
+SCREEN_DUMP_RATE = 5
 
 
 class Wrapper():
@@ -57,30 +62,27 @@ class Wrapper():
 
     def __init__(self):
         self.state = []
-        self.rewards = [0]
+        self.scores = [0]
         self.action_history = ["EPOCH START"]
         self.tick = 0
         self.last_death = 0
         self.process_screen = self.char_to_vec if ONE_HOT else ord
+        self.action_space = spaces.Discrete(len(self.GAME_ACTIONS))
+        self.observation_space = spaces.Box(0, 1,
+                [SCREEN_HEIGHT, SCREEN_WIDTH, len(self.CHAR_BINS)])
+        self.reset(restart=False)
 
-        self._start_game()
 
-    def _get_input(self):
+    def _get_random_input(self):
         return random.choice(self.GAME_ACTIONS)
 
     def _dump_screen(self):
         for idx, line in enumerate(self.screen.display, 1):
                 print("{0:2d} {1} ¶".format(idx, line))
 
-    def _dump_tick(self):
-        print("Action input: " + self.action_history[-1])
-        self._dump_screen()
-        print("Current reward: {}\tPrev reward: {}\tDiff:{}"
-              .format(self.rewards[-1], self.rewards[-2],
-                      self.rewards[-1] - self.rewards[-2]))
 
     def score_for_logs(self):
-        return self.rewards[-2]
+        return self.scores[-2]
 
     def _scrap_screen(self):
         info_line = self.state[-1]
@@ -116,14 +118,14 @@ class Wrapper():
         try:
             heuristics = self._scrap_screen()
         except AttributeError:
-            return self.rewards[-1]
+            return self.scores[-1]
         return (heuristics["explored"])
         # + (heuristics["dungeon_level"] - 1) * 1000)
 
     def _push_action(self, input_):
         for input_char in input_:
             os.write(self.master_fd, bytearray(input_char, "ascii"))
-            time.sleep(0.01)
+            time.sleep(0.001)
 
     def _get_player_pos(self):
         for y, line in enumerate(self.state):
@@ -199,8 +201,8 @@ class Wrapper():
 
                 tick += 1
                 self.state = self.screen.display
-                self.rewards += [self._calculate_reward()]
-                self._dump_tick()
+                self.scores += [self._calculate_reward()]
+                self.render()
                 game_input = self._get_input()
                 self._push_action(game_input)
                 self.action_history += [game_input]
@@ -212,7 +214,7 @@ class Wrapper():
         screen = "".join(line for line in self.screen.display)
         return ("REST" in screen and "IN" in screen and "PEACE" in screen)
 
-    def _start_game(self, restart=False):
+    def reset(self, restart=True):
         if restart:
             self._push_action(" ")
             self._push_action("\r\n")
@@ -230,41 +232,45 @@ class Wrapper():
             self.stream = pyte.Stream(self.screen)
             self.master_fd = master_fd
             print("Zmartwychwstanie!")
-            time.sleep(0.2)
+            time.sleep(0.1)
 
-    def next_tick(self, action):
-        time.sleep(0.01)
+    def render(self):
+        print("Action input: " + self.action_history[-1])
+        self._dump_screen()
+        print("Current reward: {}\tPrev reward: {}\tDiff:{}"
+              .format(self.scores[-1], self.scores[-2],
+                      self.scores[-1] - self.scores[-2]))
+
+    def step(self, action):
+        time.sleep(0.001)
         self.tick += 1
 
         game_input = self.GAME_ACTIONS[action]
         self._push_action(game_input)
         self.action_history += [game_input]
 
-        while True:
+        read_list, _wlist, _xlist = select.select(
+            [self.master_fd], [], [], 0)
+        while read_list:
+            data = os.read(read_list[0], 1024)
+            self.stream.feed(data.decode("ascii"))
             read_list, _wlist, _xlist = select.select(
                 [self.master_fd], [], [], 0)
 
-            if not read_list:
-                if not self.tick % 5:
-                    self.print_char_frame()
-                    self._dump_tick()
+        # No more output, let's process results
+        if not self.tick % SCREEN_DUMP_RATE:
+            self.render()
 
-                terminal = self._is_terminal()
-                self._push_action(" ")
-                if terminal:
-                    self.rewards += [0]
-                    self._start_game(restart=True)
-                    return 0, terminal
-                # No more output, let's process results
-                self.state = self.screen.display
-                self.rewards += [self._calculate_reward()]
-                break
+        self._push_action(" ")
+        self.state = self.screen.display
+        self.scores += [self._calculate_reward()]
 
-            else:
-                data = os.read(read_list[0], 1024)
-                self.stream.feed(data.decode("ascii"))
+        obs = self.get_frame()
+        terminal = self._is_terminal()
+        reward = self.scores[-1] - self.scores[-2] if not terminal else 0
+        info = {}
 
-        return self.rewards[-1] - self.rewards[-2], terminal
+        return obs, reward, terminal, info
 
 
 def init_game():
