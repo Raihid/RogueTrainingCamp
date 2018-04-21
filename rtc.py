@@ -232,7 +232,7 @@ class Wrapper():
             self.stream = pyte.Stream(self.screen)
             self.master_fd = master_fd
             print("Zmartwychwstanie!")
-            scores += [0]
+            self.scores += [0]
             time.sleep(0.1)
 
     def render(self):
