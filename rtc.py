@@ -18,13 +18,13 @@ from gym import spaces
 
 # TODO
 # Przerobic to na API od OpenAI
-# Sygnal po zakończeniu tury od rogue
+# Sygnal po zakonczeniu tury od rogue
 # Staty - analiza deskryptora, wysokie value stanu =>
 # ktora czesc stanu odpowiada za to, saliency
 
 # A3C, A2C
 # Labirynty 3D, Unreal, RE with axilary tasks, mininagrody do chodzenia
-# Logarytm z pól
+# Logarytm z pol
 # Advantage? Policy gradient, Sutton, Silvera
 # Wyciac ostatnia linijke
 
@@ -78,7 +78,7 @@ class Wrapper():
 
     def _dump_screen(self):
         for idx, line in enumerate(self.screen.display, 1):
-                print("{0:2d} {1} ¶".format(idx, line))
+                print("{0:2d} {1} =".format(idx, line))
 
 
     def score_for_logs(self):
@@ -232,6 +232,7 @@ class Wrapper():
             self.stream = pyte.Stream(self.screen)
             self.master_fd = master_fd
             print("Zmartwychwstanie!")
+            scores += [0]
             time.sleep(0.1)
 
     def render(self):
@@ -253,6 +254,7 @@ class Wrapper():
             [self.master_fd], [], [], 0)
         while read_list:
             data = os.read(read_list[0], 1024)
+            print(data)
             self.stream.feed(data.decode("ascii"))
             read_list, _wlist, _xlist = select.select(
                 [self.master_fd], [], [], 0)
@@ -267,6 +269,9 @@ class Wrapper():
 
         obs = self.get_frame()
         terminal = self._is_terminal()
+        if terminal:
+            self.reset()
+
         reward = self.scores[-1] - self.scores[-2] if not terminal else 0
         info = {}
 

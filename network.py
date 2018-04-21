@@ -13,7 +13,7 @@ GAMMA = 0.99
 INITIAL_EPSILON = 0.99
 MINIMUM_EPSILON = 0.075
 
-EXPERIMENT = 50000
+EXPERIMENT = 10000
 EXPLORATION = 1000000
 # EXPLORATION = 200000
 MEMORY_SIZE = 120000
@@ -61,30 +61,70 @@ class DeepLearningTrainer:
 
     def build_network(self, name):
         with tf.variable_scope(name):
-            weights = [None] * 5
-            bias = [None] * 5
-            layer = [None] * 4
 
-            (weights[0], bias[0]) = generate_node([4, 4, ONEHOT_LEN, 32])
-            (weights[1], bias[1]) = generate_node([3, 3, 32, 64])
-            (weights[2], bias[2]) = generate_node([2, 2, 64, 64])
-            (weights[3], bias[3]) = generate_node([30720, 512])
-            (weights[4], bias[4]) = generate_node([512, self.env.ACTIONS])
+            with tf.variable_scope("first_tower"):
+                weights = [None] * 3
+                bias = [None] * 3
+                layer = [None] * 2
+                (weights[0], bias[0]) = generate_node([8, 8, ONEHOT_LEN, 16])
+                (weights[1], bias[1]) = generate_node([4, 4, 16, 16])
+                (weights[2], bias[2]) = generate_node([2, 2, 16, 16])
 
-            layer[0] = conv_relu(self.holders["obs"], weights[0], 2, bias[0])
-            layer[1] = conv_relu(layer[0], weights[1], 1, bias[1])
-            layer[2] = conv_relu(layer[1], weights[2], 1, bias[2])
-            full_layer = tf.matmul(tf.reshape(layer[2], [-1, 30720]), weights[3])
-            layer[3] = tf.nn.relu(full_layer + bias[3])
+                layer[0] = conv_relu(self.holders["obs"], weights[0], 4, bias[0])
+                layer[1] = conv_relu(layer[0], weights[1], 2, bias[1])
+                first_tower_output = conv_relu(layer[1], weights[2], 1, bias[2])
 
-        return tf.matmul(layer[3], weights[4]) + bias[4]
+            with tf.variable_scope("second_tower"):
+                weights = [None] * 2
+                bias = [None] * 2
+                layer = [None] * 1
+                (weights[0], bias[0]) = generate_node([6, 6, ONEHOT_LEN, 16])
+                (weights[1], bias[1]) = generate_node([2, 2, 16, 16])
+
+                layer[0] = conv_relu(self.holders["obs"], weights[0], 2, bias[0])
+                second_tower_output = conv_relu(layer[0], weights[1], 1, bias[1])
+
+
+            with tf.variable_scope("third_tower"):
+                weights = [None] * 3
+                bias = [None] * 3
+                layer = [None] * 2
+                (weights[0], bias[0]) = generate_node([4, 4, ONEHOT_LEN, 8])
+                (weights[1], bias[1]) = generate_node([3, 3, 8, 8])
+                (weights[2], bias[2]) = generate_node([2, 2, 8, 8])
+
+                layer[0] = conv_relu(self.holders["obs"], weights[0], 2, bias[0])
+                layer[1] = conv_relu(layer[0], weights[1], 1, bias[1])
+                third_tower_output = conv_relu(layer[1], weights[2], 1, bias[2])
+
+            weights = [None] * 3
+            bias = [None] * 3
+            layer = [None] * 2
+
+            flat_first_tower = tf.reshape(first_tower_output, [-1, 3 * 10 * 16])
+            flat_second_tower = tf.reshape(second_tower_output, [-1, 12 * 40 * 16])
+            flat_third_tower = tf.reshape(third_tower_output, [-1, 12 * 40 * 8])
+
+            flat_towers = tf.concat([flat_first_tower,
+                                     flat_second_tower,
+                                     flat_third_tower], axis=1)
+
+            (weights[0], bias[0]) = generate_node([12000, 512])
+            (weights[1], bias[1]) = generate_node([512, self.env.ACTIONS])
+
+
+            layer[0] = tf.matmul(flat_towers, weights[0])
+            layer[1] = tf.nn.relu(layer[0] + bias[0])
+
+        return tf.matmul(layer[1], weights[1]) + bias[1]
 
     def build_optimizer(self):
-        product = tf.multiply(self.holders["results"], self.holders["actions"])
-        results_v = tf.reduce_sum(product, reduction_indices=1)
-        square_error = tf.square(self.holders["target_fun"] - results_v)
-        cost = tf.reduce_mean(square_error)
-        training_step = tf.train.AdamOptimizer(ALPHA).minimize(cost)
+        with tf.variable_scope("optimizer"):
+            product = tf.multiply(self.holders["results"], self.holders["actions"])
+            results_v = tf.reduce_sum(product, reduction_indices=1)
+            square_error = tf.square(self.holders["target_fun"] - results_v)
+            cost = tf.reduce_mean(square_error)
+            training_step = tf.train.AdamOptimizer(ALPHA).minimize(cost)
         return training_step
 
     def initial_obs(self):
@@ -130,13 +170,15 @@ class DeepLearningTrainer:
         sample = random.sample(self.batch, MINIBATCH_SIZE)
         feed_dict = {self.holders["obs"]: [member[3] for member in sample]}
 
-        readout = self.holders["target_results"].eval(feed_dict=feed_dict)
-        compare_readout = self.holders["results"].eval(feed_dict=feed_dict)
+        target_readout, readout = self.session.run(
+                (self.holders["target_results"],
+                 self.holders["results"]),
+                feed_dict=feed_dict)
         y = [None] * MINIBATCH_SIZE
         for idx, member in enumerate(sample):
             y[idx] = member[2]
             if member[4] is False:
-                y[idx] += GAMMA * np.max(readout[idx])
+                y[idx] += GAMMA * readout[idx][np.argmax(target_readout[idx])]
 
         self.holders["training_step"].run(feed_dict={
             self.holders["target_fun"]: y,
@@ -158,10 +200,10 @@ class DeepLearningTrainer:
     def build_target_updater(self):
         q_vars = tf.get_collection(
                 tf.GraphKeys.GLOBAL_VARIABLES,
-                scope=tf.get_variable_scope().name + "/q_network")
+                scope="q_network")
         target_q_vars = tf.get_collection(
                 tf.GraphKeys.GLOBAL_VARIABLES,
-                scope=tf.get_variable_scope().name + "/target_q_network")
+                scope="target_q_network")
 
         target_updates = []
         for var, target_var in zip(sorted(q_vars, key=lambda v: v.name),
@@ -196,7 +238,7 @@ class DeepLearningTrainer:
                                     .format(score, self.epochs))
                 self.log_file.flush()
 
-            if self.epochs % 20 == 0:
+            if self.epochs % 5000 == 0:
                 self.session.run(self.update_target_op)
 
             if self.epochs % 5000 == 0:
@@ -222,6 +264,9 @@ class DeepLearningTrainer:
 
     def run(self):
         self.session.run(tf.initialize_all_variables())
+        # obs, _, _, _ = self.initial_obs()
+        # input_dict = {self.holders["obs"]: [obs]}
+        # towers = self.session.run(self.towers, feed_dict=input_dict)
         self.train_network()
 
 if __name__ == "__main__":
