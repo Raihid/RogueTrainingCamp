@@ -14,6 +14,7 @@ import string
 import sys
 import time
 
+from collections import deque
 from gym import spaces
 
 # TODO
@@ -36,7 +37,60 @@ CLIPPED_SCREEN_WIDTH = 80
 
 SQUARE_SCREEN = False
 ONE_HOT = True
-SCREEN_DUMP_RATE = 5
+SCREEN_DUMP_RATE = 10
+
+
+class MultiWrapper():
+
+    GAME_ACTIONS = [# " ",  # skip
+                    "k",  # go_up
+                    "j",  # go_down
+                    "h",  # go_left
+                    "l",  # go_right
+                    # ">",  # descend
+                    # "s",  # search
+                    # "." search
+                    ]
+    ACTIONS = len(GAME_ACTIONS)
+    NAME = "Rogue"
+    CHAR_BINS = ["@", # Player char
+                 string.ascii_letters, # Monsters
+                 "-|",  # Walls
+                 "+",  # Doors
+                 ".#",  # Floors/corridors
+                 "*?!%[]",  # Items
+                 " ",  # Empty space
+                 ""]  # Other
+
+    def __init__(self):
+        self.action_space = spaces.Discrete(len(self.GAME_ACTIONS))
+        print(self.action_space.shape)
+        self.observation_space = spaces.Box(0, 1,
+                [SCREEN_HEIGHT, SCREEN_WIDTH, len(self.CHAR_BINS)])
+        self.num_envs = 10
+        self.envs = [Wrapper() for _ in range(self.num_envs)]
+
+    def reset(self, restart=True):
+        return np.array([env.reset(restart) for env in self.envs])
+
+    def step(self, actions):
+        multi_obs = []
+        multi_rewards = []
+        multi_dones = []
+
+        for env, action in zip(self.envs(), actions):
+            obs, reward, done, _ = env.step(action)
+            multi_obs += [obs]
+            multi_rewards += [reward]
+            multi_dones += [done]
+
+        return (np.array(multi_obs),
+                np.array(multi_rewards),
+                np.array(multi_dones),
+                None)
+
+    def close():
+        pass
 
 
 class Wrapper():
@@ -62,8 +116,9 @@ class Wrapper():
 
     def __init__(self):
         self.state = []
+        self.state_history = deque([], 10)
         self.scores = [0]
-        self.action_history = ["EPOCH START"]
+        self.action_history = deque(["EPOCH START"], 100)
         self.tick = 0
         self.last_death = 0
         self.process_screen = self.char_to_vec if ONE_HOT else ord
@@ -109,8 +164,25 @@ class Wrapper():
         heuristics["exp_level"] = int(exp_captures.group(1))
         heuristics["exp_points"] = int(exp_captures.group(2))
 
-        heuristics["explored"] = sum(not c.isspace()
-                                     for line in self.state[1:-1] for c in line)
+        if len(self.state_history) >= 2:
+            new_explored = sum(not c.isspace()
+                               for line in self.state[1:-1] for c in line)
+            old_explored = sum(not c.isspace()
+                               for line in self.state_history[-2][1:-1] for c in line)
+            heuristics["explored"] = new_explored - old_explored
+        else:
+            heuristics["explored"] = 0
+
+
+        if len(self.state_history) >= 10:
+            old_pos = self._get_player_pos(self.state_history[0])
+            new_pos = self._get_player_pos()
+            distance = abs(old_pos[0] - new_pos[0]) + abs(old_pos[1] - new_pos[1])
+            heuristics["pos_diff"] = (distance - 4) * 0.2
+        else:
+            heuristics["pos_diff"] = 0
+
+        heuristics["constant"] = -0.05
 
         return heuristics
 
@@ -119,7 +191,7 @@ class Wrapper():
             heuristics = self._scrap_screen()
         except AttributeError:
             return self.scores[-1]
-        return (heuristics["explored"])
+        return heuristics["explored"] + heuristics["pos_diff"] + heuristics["constant"]
         # + (heuristics["dungeon_level"] - 1) * 1000)
 
     def _push_action(self, input_):
@@ -127,8 +199,10 @@ class Wrapper():
             os.write(self.master_fd, bytearray(input_char, "ascii"))
             time.sleep(0.001)
 
-    def _get_player_pos(self):
-        for y, line in enumerate(self.state):
+    def _get_player_pos(self, state=None):
+        if state is None:
+            state = self.state
+        for y, line in enumerate(state):
             x = line.find("@")
             if x != -1:
                 return x, y
@@ -232,8 +306,12 @@ class Wrapper():
             self.stream = pyte.Stream(self.screen)
             self.master_fd = master_fd
             print("Zmartwychwstanie!")
+            self.state_history.clear()
             self.scores += [0]
             time.sleep(0.1)
+
+        obs = self.get_frame()
+        return np.zeros([SCREEN_HEIGHT, SCREEN_WIDTH, len(self.CHAR_BINS)])
 
     def render(self):
         print("Action input: " + self.action_history[-1])
@@ -254,7 +332,6 @@ class Wrapper():
             [self.master_fd], [], [], 0)
         while read_list:
             data = os.read(read_list[0], 1024)
-            print(data)
             self.stream.feed(data.decode("ascii"))
             read_list, _wlist, _xlist = select.select(
                 [self.master_fd], [], [], 0)
@@ -265,14 +342,15 @@ class Wrapper():
 
         self._push_action(" ")
         self.state = self.screen.display
-        self.scores += [self._calculate_reward()]
+        self.state_history.append(self.state)
+        reward = self._calculate_reward()
+        self.scores += [reward]
 
         obs = self.get_frame()
         terminal = self._is_terminal()
         if terminal:
             self.reset()
 
-        reward = self.scores[-1] - self.scores[-2] if not terminal else 0
         info = {}
 
         return obs, reward, terminal, info
