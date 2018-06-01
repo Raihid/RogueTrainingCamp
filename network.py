@@ -193,6 +193,9 @@ class DeepLearningTrainer:
             new_obs, reward, terminal, info = self.env.step(chosen_action)
             self.batch.append((obs, action_v, reward, new_obs, terminal))
 
+            if self.epochs % 10 == 0:
+                self.env.render()
+
             obs = new_obs
             self.epochs += 1
         return obs
@@ -237,6 +240,9 @@ class DeepLearningTrainer:
                 self.log_file.write("Score: {}\tEpoch: {}\n"
                                     .format(score, self.epochs))
                 self.log_file.flush()
+
+            if self.epochs % 10 == 0:
+                self.env.render()
 
             if self.epochs % 5000 == 0:
                 self.session.run(self.update_target_op)

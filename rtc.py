@@ -9,26 +9,21 @@ import pty
 import pyte
 import random
 import re
+import signal
 import select
 import string
 import sys
 import time
+import threading
 
 from collections import deque
 from gym import spaces
+from threading import Thread
+#from pathos.multiprocessing import Pool
+# from multiprocessing import Pool
 
-# TODO
-# Przerobic to na API od OpenAI
-# Sygnal po zakonczeniu tury od rogue
 # Staty - analiza deskryptora, wysokie value stanu =>
 # ktora czesc stanu odpowiada za to, saliency
-
-# A3C, A2C
-# Labirynty 3D, Unreal, RE with axilary tasks, mininagrody do chodzenia
-# Logarytm z pol
-# Advantage? Policy gradient, Sutton, Silvera
-# Wyciac ostatnia linijke
-
 
 executable = "/home/rahid/Programming/Repos/rogue5.2/rogue"
 SCREEN_WIDTH = 80
@@ -37,8 +32,9 @@ CLIPPED_SCREEN_WIDTH = 80
 
 SQUARE_SCREEN = False
 ONE_HOT = True
-SCREEN_DUMP_RATE = 10
 
+def weird(env, action, idx):
+    return env.step(action, idx)
 
 class MultiWrapper():
 
@@ -62,27 +58,45 @@ class MultiWrapper():
                  " ",  # Empty space
                  ""]  # Other
 
-    def __init__(self):
+    def __init__(self, num_envs=15):
         self.action_space = spaces.Discrete(len(self.GAME_ACTIONS))
-        print(self.action_space.shape)
         self.observation_space = spaces.Box(0, 1,
                 [SCREEN_HEIGHT, SCREEN_WIDTH, len(self.CHAR_BINS)])
-        self.num_envs = 10
+        self.num_envs = num_envs
         self.envs = [Wrapper() for _ in range(self.num_envs)]
+        self.step_n = 0
 
     def reset(self, restart=True):
         return np.array([env.reset(restart) for env in self.envs])
 
     def step(self, actions):
-        multi_obs = []
-        multi_rewards = []
-        multi_dones = []
 
-        for env, action in zip(self.envs(), actions):
-            obs, reward, done, _ = env.step(action)
-            multi_obs += [obs]
-            multi_rewards += [reward]
-            multi_dones += [done]
+        threads = []
+        results = [None] * self.num_envs
+
+        def step_fn(env, action, results, idx):
+            results[idx] = env.step(action)
+
+        for idx, (env, action) in enumerate(zip(self.envs, actions)):
+            t = threading.Thread(target=step_fn, args=(env, action,
+                                                       results, idx))
+            t.start()
+            threads += [t]
+
+        for t in threads:
+            t.join()
+
+        multi_obs, multi_rewards, multi_dones, _ = zip(*results)
+
+        # results = []
+        # for env, action in zip(self.envs, actions):
+        #     results += [env.step(action)]
+        # multi_obs, multi_rewards, multi_dones, _ = zip(*results)
+
+        if not self.step_n % 10:
+            self.envs[0].render()
+
+        self.step_n += 1
 
         return (np.array(multi_obs),
                 np.array(multi_rewards),
@@ -121,11 +135,11 @@ class Wrapper():
         self.action_history = deque(["EPOCH START"], 100)
         self.tick = 0
         self.last_death = 0
-        self.process_screen = self.char_to_vec if ONE_HOT else ord
+        self.reset(restart=False)
         self.action_space = spaces.Discrete(len(self.GAME_ACTIONS))
         self.observation_space = spaces.Box(0, 1,
-                [SCREEN_HEIGHT, SCREEN_WIDTH, len(self.CHAR_BINS)])
-        self.reset(restart=False)
+           [SCREEN_HEIGHT, SCREEN_WIDTH, len(self.CHAR_BINS)])
+        self.num_envs = 1
 
 
     def _get_random_input(self):
@@ -133,7 +147,7 @@ class Wrapper():
 
     def _dump_screen(self):
         for idx, line in enumerate(self.screen.display, 1):
-                print("{0:2d} {1} =".format(idx, line))
+                print("{0:2d} {1} |".format(idx, line))
 
 
     def score_for_logs(self):
@@ -248,7 +262,8 @@ class Wrapper():
 
         processed_state = []
         for line in self.state:
-            processed_state += [[self.process_screen(c) for c
+            process_screen = self.char_to_vec if ONE_HOT else ord
+            processed_state += [[process_screen(c) for c
                                  in line[left_edge:right_edge]]]
 
         padding = (CLIPPED_SCREEN_WIDTH - SCREEN_HEIGHT) if SQUARE_SCREEN else 0
@@ -277,7 +292,7 @@ class Wrapper():
                 self.state = self.screen.display
                 self.scores += [self._calculate_reward()]
                 self.render()
-                game_input = self._get_input()
+                game_input = self.GAME_ACTIONS[self.action_space.sample()]
                 self._push_action(game_input)
                 self.action_history += [game_input]
             else:
@@ -293,8 +308,9 @@ class Wrapper():
             self._push_action(" ")
             self._push_action("\r\n")
             self._push_action("^C")
+            os.kill(self.p_pid, signal.SIGTERM)
             os.close(self.master_fd)
-            os.wait()
+            os.waitpid(self.p_pid, 0)
 
         p_pid, master_fd = pty.fork()
         if p_pid == 0:  # Child.
@@ -302,10 +318,10 @@ class Wrapper():
                        env=dict(TERM="linux", COLUMNS="80", LINES="24"))
             os.exit(0)
         else:
+            self.p_pid = p_pid
             self.screen = pyte.Screen(80, 24)
             self.stream = pyte.Stream(self.screen)
             self.master_fd = master_fd
-            print("Zmartwychwstanie!")
             self.state_history.clear()
             self.scores += [0]
             time.sleep(0.1)
@@ -320,9 +336,12 @@ class Wrapper():
               .format(self.scores[-1], self.scores[-2],
                       self.scores[-1] - self.scores[-2]))
 
-    def step(self, action):
-        time.sleep(0.001)
+    def step(self, action, idx=None):
+        time.sleep(0.005)
         self.tick += 1
+
+        if isinstance(action, list) or isinstance(action, np.ndarray):
+            action = action[0]
 
         game_input = self.GAME_ACTIONS[action]
         self._push_action(game_input)
@@ -337,8 +356,8 @@ class Wrapper():
                 [self.master_fd], [], [], 0)
 
         # No more output, let's process results
-        if not self.tick % SCREEN_DUMP_RATE:
-            self.render()
+        # if not self.tick % SCREEN_DUMP_RATE:
+        #     self.render()
 
         self._push_action(" ")
         self.state = self.screen.display
@@ -353,7 +372,10 @@ class Wrapper():
 
         info = {}
 
-        return obs, reward, terminal, info
+        if idx is not None:
+            return idx, obs, reward, terminal, info
+        else:
+            return obs, reward, terminal, info
 
 
 def init_game():
